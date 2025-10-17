@@ -5,7 +5,7 @@ import time
 
 from elevenlabs.client import ElevenLabs
 from elevenlabs.conversational_ai.conversation import Conversation, AudioInterface
-from pipecat.frames.frames import AudioRawFrame, Frame, TranscriptionFrame
+from pipecat.frames.frames import AudioRawFrame, Frame, StartFrame, TranscriptionFrame
 from pipecat.processors.frame_processor import FrameProcessor
 
 logger = logging.getLogger("pipecat")
@@ -30,6 +30,7 @@ class ElevenLabsSTSService(FrameProcessor):
         self.requires_auth = kwargs.get("requires_auth", False)
         self._conversation = None
         self._audio_interface = self.CustomAudioInterface(self)
+        self._conversation_task = None
 
     async def run_conversation(self):
         self._conversation = Conversation(
@@ -45,16 +46,15 @@ class ElevenLabsSTSService(FrameProcessor):
         self._conversation.wait_for_session_end()
 
     async def process_frame(self, frame: Frame, direction):
-        if isinstance(frame, AudioRawFrame):
+        await super().process_frame(frame, direction)
+
+        if isinstance(frame, StartFrame):
+            self._conversation_task = self.create_task(self.run_conversation())
+        elif isinstance(frame, AudioRawFrame):
             if self._audio_interface.input_callback:
                 self._audio_interface.input_callback(frame.audio)
-        await self.push_frame(frame)
-
-    async def transfer_agent(self, agent_id: str):
-        logger.info(f"Transferring to agent {agent_id}")
-        self._agent_id = agent_id
-        if self._conversation:
-            self._conversation.end_session()
+        else:
+            await self.push_frame(frame)
 
     def _on_agent_response(self, response: str):
         logger.info(f"Agent response: {response}")
@@ -65,9 +65,6 @@ class ElevenLabsSTSService(FrameProcessor):
     def _on_user_transcript(self, transcript: str):
         logger.info(f"User transcript: {transcript}")
         self.push_frame(TranscriptionFrame(transcript, "user", int(time.time() * 1000)))
-
-    async def run(self):
-        await asyncio.to_thread(self.run_conversation)
 
     class CustomAudioInterface(AudioInterface):
         def __init__(self, service: "ElevenLabsSTSService"):
