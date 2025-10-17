@@ -49,7 +49,8 @@ class ElevenLabsSTSService(FrameProcessor):
         await super().process_frame(frame, direction)
 
         if isinstance(frame, StartFrame):
-            self._conversation_task = self.create_task(self.run_conversation())
+            self._conversation_task = self.create_task(self.run_conversation(), "elevenlabs_conversation")
+            await self.push_frame(frame)
         elif isinstance(frame, AudioRawFrame):
             if self._audio_interface.input_callback:
                 self._audio_interface.input_callback(frame.audio)
@@ -64,7 +65,7 @@ class ElevenLabsSTSService(FrameProcessor):
 
     def _on_user_transcript(self, transcript: str):
         logger.info(f"User transcript: {transcript}")
-        self.push_frame(TranscriptionFrame(transcript, "user", int(time.time() * 1000)))
+        self.create_task(self.push_frame(TranscriptionFrame(transcript, "user", int(time.time() * 1000))), "push_transcription")
 
     class CustomAudioInterface(AudioInterface):
         def __init__(self, service: "ElevenLabsSTSService"):
@@ -79,7 +80,7 @@ class ElevenLabsSTSService(FrameProcessor):
 
         def output(self, audio: bytes):
             frame = AudioRawFrame(audio, self._service.downstream_audio_format, 1)
-            self._service.task_manager.create_task(self._service.push_frame(frame))
+            self._service.create_task(self._service.push_frame(frame), "push_audio")
 
         def interrupt(self):
             pass
