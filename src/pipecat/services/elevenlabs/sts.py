@@ -5,7 +5,7 @@ import time
 
 from elevenlabs.client import ElevenLabs
 from elevenlabs.conversational_ai.conversation import Conversation, AudioInterface
-from pipecat.frames.frames import AudioRawFrame, Frame, StartFrame, TranscriptionFrame
+from pipecat.frames.frames import AudioRawFrame, Frame, OutputAudioRawFrame, StartFrame, TranscriptionFrame
 from pipecat.processors.frame_processor import FrameProcessor
 
 logger = logging.getLogger("pipecat")
@@ -24,13 +24,14 @@ class ElevenLabsSTSService(FrameProcessor):
     """
     def __init__(self, api_key: str, agent_id: str, **kwargs):
         super().__init__(**kwargs)
-        self.downstream_audio_format = "pcm_16000"
+        self.sample_rate = 16000
         self._client = ElevenLabs(api_key=api_key)
         self._agent_id = agent_id
         self.requires_auth = kwargs.get("requires_auth", False)
         self._conversation = None
         self._audio_interface = self.CustomAudioInterface(self)
         self._conversation_task = None
+        self._close_event = asyncio.Event()
 
     async def run_conversation(self):
         self._conversation = Conversation(
@@ -43,7 +44,14 @@ class ElevenLabsSTSService(FrameProcessor):
             requires_auth=self.requires_auth,
         )
         self._conversation.start_session()
-        self._conversation.wait_for_session_end()
+        await self._close_event.wait()
+
+    async def stop(self):
+        if self._conversation:
+            self._conversation.end_session()
+        self._close_event.set()
+        if self._conversation_task:
+            await self._conversation_task
 
     async def process_frame(self, frame: Frame, direction):
         await super().process_frame(frame, direction)
@@ -76,11 +84,12 @@ class ElevenLabsSTSService(FrameProcessor):
             self.input_callback = input_callback
 
         def stop(self):
-            pass
+            self._service.stop()
 
         def output(self, audio: bytes):
-            frame = AudioRawFrame(audio, self._service.downstream_audio_format, 1)
-            self._service.create_task(self._service.push_frame(frame), "push_audio")
+            frame = OutputAudioRawFrame(audio=audio, sample_rate=self._service.sample_rate, num_channels=1)
+            asyncio.run_coroutine_threadsafe(
+                self._service.push_frame(frame), self._service.get_event_loop())
 
         def interrupt(self):
             pass
